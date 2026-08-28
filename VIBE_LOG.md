@@ -23,13 +23,16 @@
 ### 🚀 In Progress
 - [x] **Repository & Multi-AI Infrastructure** (`vibe/vivian-setup` by @Vivian with Antigravity)
   - Created `AGENTS.md`, `VIBE_LOG.md`, `.cursorrules`, `CLAUDE.md`, `CONTRIBUTING.md`, `.github/PULL_REQUEST_TEMPLATE.md`.
+- [ ] **Kochi Metro AI Fleet Operations & Chart Optimization Platform** (`vibe/vivian-kochi-metro` by @Vivian with Antigravity)
+  - Dual-ML Failure Prediction & Station Crowding Engine.
+  - CP-SAT Resilience Schedule Optimizer & ML Chart Evaluator (Efficiency %).
+  - Real-Time Chart Efficiency Degradation Monitor & "What-If" Simulator.
+  - Closed-Loop Feedback & Explainable AI Supervisor Console.
 
 ### 📋 Backlog (Pick up & claim a task below!)
 - [ ] **Frontend Foundation / UI Shell**: Set up Next.js / Vite / Tailwind UI layout.
 - [ ] **Backend Server / API Routes**: Set up server framework (Express / FastAPI / Hono).
 - [ ] **Database & Authentication**: Schema design, ORM setup (Prisma / Drizzle / Supabase), and Auth routes.
-- [ ] **Core Feature Module A**: Primary business logic / app feature.
-- [ ] **Core Feature Module B**: Secondary feature / integration module.
 - [ ] **DevOps & CI/CD**: GitHub Actions build & test workflow.
 
 ---
@@ -39,17 +42,42 @@
 > **AI Tool Note**: Add any shared TypeScript interfaces, Zod schemas, or REST/GraphQL routes here so other team members' AI tools do not invent conflicting signatures.
 
 ```typescript
-// Shared Type Registry Example:
-export interface UserProfile {
-  id: string;
-  email: string;
-  name: string;
-  role: 'admin' | 'user';
-  createdAt: string;
+// Kochi Metro Data Interfaces:
+export interface TrainHealthMetrics {
+  trainId: string; // e.g. "KM-101"
+  brakeWearPct: number;
+  hvacPressurePsi: number;
+  doorCycles: number;
+  mileageKm: number;
+  pastDelayCount: number;
+  subsystemFailureRisk: {
+    brakes: number;
+    doors: number;
+    hvac: number;
+    traction: number;
+  };
+  overallHealthScore: number; // 0 - 100
+  failureProbabilityNextDay: number; // 0.0 - 1.0
+  consequenceScore: number;
 }
 
-// Active API Endpoints:
-// GET /api/v1/health -> { status: "ok", timestamp: string }
+export interface ChartEvaluationResult {
+  chartId: string;
+  expectedEfficiencyPct: number; // e.g. 94.2
+  failureProbabilityPct: number; // e.g. 5.8
+  expectedDelayMinutes: number;
+  reserveAdequacy: 'High' | 'Medium' | 'Low';
+  confidenceScorePct: number;
+  recommendedTrains: string[];
+  standbyTrains: string[];
+  maintenanceTrains: string[];
+}
+
+// Active Kochi Metro Endpoints:
+// GET  /api/kochi/trains/health     -> TrainHealthMetrics[]
+// GET  /api/kochi/chart/evaluate    -> ChartEvaluationResult
+// POST /api/kochi/chart/optimize    -> Optimized Schedule Proposal
+// POST /api/kochi/simulate/whatif   -> Disruption Simulation Result
 ```
 
 ---
