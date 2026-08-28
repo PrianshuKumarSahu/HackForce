@@ -1,0 +1,65 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --km-teal: #009999;
+  --km-teal-dark: #007A7A;
+  --km-cyan: #16DDDD;
+  --km-navy: #0F172A;
+  --km-slate: #1E293B;
+  --km-aqua: #E0F7F6;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background-color: #f8fafc;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: 'Outfit', 'Inter', sans-serif;
+}
+
+/* Custom Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #009999;
+}
+
+/* Kochi Metro Glassmorphism & Gradient Utilities */
+.km-gradient-bg {
+  background: linear-gradient(135deg, #009999 0%, #007a7a 50%, #0f172a 100%);
+}
+
+.km-card-glass {
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(0, 153, 153, 0.15);
+  box-shadow: 0 4px 20px -2px rgba(15, 23, 42, 0.05);
+}
+
+.km-badge-teal {
+  background: #E0F7F6;
+  color: #007A7A;
+  border: 1px solid rgba(0, 153, 153, 0.3);
+}
+
+.km-glow-hover:hover {
+  box-shadow: 0 0 20px rgba(0, 153, 153, 0.35);
+  transition: all 0.2s ease-in-out;
+}
