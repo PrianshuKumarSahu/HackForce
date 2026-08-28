@@ -253,6 +253,110 @@ Retrieves all events logged for a specific train unit.
 
 ---
 
+### 🗺️ KMRL Location, Depot & Stabling Geometry APIs
+
+#### Network Topology Overview
+The location layer models all **24 Blue Line Mainline stations** (IDs 1–24), **Muttom Depot stabling lines & maintenance bays** (IDs 101–108), and **Kakkanad Depot lines** (IDs 201–204).
+Track connections detail inter-station distances, low-speed depot shunting times, and shunting cost indices.
+
+#### 1. `GET /api/v1/depots` (Alias: `GET /api/depots`)
+Returns list of all depots with capacities, stabling line counts, and live occupancy.
+
+**Sample Response (`200 OK`)**:
+```json
+{
+  "total_depots": 2,
+  "depots": [
+    {
+      "depot_id": "DEPOT-MUTTOM",
+      "name": "Muttom Main Depot & Maintenance Workshop",
+      "total_stabling_lines": 8,
+      "total_inspection_bays": 4,
+      "total_capacity": 20,
+      "current_occupancy": 8,
+      "available_capacity": 12,
+      "stabled_train_ids": ["KM-101", "KM-102", "KM-103", "KM-104", "KM-105", "KM-106", "KM-107", "KM-108"],
+      "location_ids": [101, 102, 103, 104, 105, 106, 107, 108]
+    }
+  ]
+}
+```
+
+#### 2. `GET /api/v1/locations` (Alias: `GET /api/locations`)
+Returns complete list of all 36 stations and depot tracks with capacities and current occupancy.
+
+#### 3. `GET /api/v1/locations/{location_id}`
+Returns details for a specific location.
+
+**Sample Request**: `GET /api/v1/locations/101`  
+**Sample Response (`200 OK`)**:
+```json
+{
+  "location_id": 101,
+  "name": "Muttom Depot Stabling Line 1",
+  "depot": "Muttom Depot",
+  "type": "STABLING_LINE",
+  "capacity": 2,
+  "occupied_count": 1,
+  "available_capacity": 1,
+  "stabled_train_ids": ["KM-101"],
+  "is_depot_track": true
+}
+```
+
+#### 4. `GET /api/v1/locations/{location_id}/connections`
+Returns outbound track connections from a location including distance, movement time, and shunting cost.
+
+**Sample Request**: `GET /api/v1/locations/5/connections` (Muttom Station)  
+**Sample Response (`200 OK`)**:
+```json
+{
+  "location_id": 5,
+  "location_name": "Muttom Station",
+  "total_connections": 10,
+  "connections": [
+    {
+      "from_location_id": 5,
+      "from_location_name": "Muttom Station",
+      "to_location_id": 6,
+      "to_location_name": "Kalamassery Station",
+      "distance_meters": 1700.0,
+      "movement_time_minutes": 2.8,
+      "movement_cost": 85.0,
+      "track_type": "MAINLINE"
+    },
+    {
+      "from_location_id": 5,
+      "from_location_name": "Muttom Station",
+      "to_location_id": 101,
+      "to_location_name": "Muttom Depot Stabling Line 1",
+      "distance_meters": 450.0,
+      "movement_time_minutes": 3.0,
+      "movement_cost": 45.0,
+      "track_type": "DEPOT_SHUNTING"
+    }
+  ]
+}
+```
+
+#### 5. `GET /api/v1/trains/{train_id}/location`
+Returns current location, depot name, track type, and stabling state of a specific trainset.
+
+**Sample Request**: `GET /api/v1/trains/KM-101/location`  
+**Sample Response (`200 OK`)**:
+```json
+{
+  "train_id": "KM-101",
+  "location_id": 101,
+  "location_name": "Muttom Depot Stabling Line 1",
+  "depot": "Muttom Depot",
+  "type": "STABLING_LINE",
+  "is_depot_track": true
+}
+```
+
+---
+
 ### 🔮 Additional Engine Endpoints
 
 - `GET /api/v1/fleet/health` - Subsystem risk breakdown across the fleet.
@@ -266,6 +370,7 @@ Retrieves all events logged for a specific train unit.
 
 ## 📌 Field Availability Notice
 
-* **Available Fields**: `train_id`, `train_type`, `health_score`, `next_day_failure_prob`, `consequence_score`, `subsystem_risks` (`brakes`, `doors`, `hvac`, `traction`), `primary_risk_subsystem`, `maintenance_urgency`, `brake_pad_wear_pct`, `door_cycles`, `hvac_pressure_psi`, `traction_motor_temp_c`, `mileage_km`, `days_since_ibl`, `past_30d_delays`, `past_30d_faults`.
-* **Live IoT Overlay**: Submitting IoT telemetry via `POST /api/v1/iot/telemetry` dynamically overlays live sensor readings onto `GET /api/v1/trains` and `GET /api/v1/trains/{train_id}`!
+* **Available Fields**: `train_id`, `train_type`, `current_location_id`, `current_location_name`, `health_score`, `next_day_failure_prob`, `consequence_score`, `subsystem_risks` (`brakes`, `doors`, `hvac`, `traction`), `primary_risk_subsystem`, `maintenance_urgency`, `brake_pad_wear_pct`, `door_cycles`, `hvac_pressure_psi`, `traction_motor_temp_c`, `mileage_km`, `days_since_ibl`, `past_30d_delays`, `past_30d_faults`.
+* **Live IoT & Location Overlay**: Submitting IoT telemetry with `location_id` dynamically updates the train's position and reflects on `GET /api/v1/trains`, `GET /api/v1/trains/{train_id}`, and `GET /api/v1/locations`!
+
 

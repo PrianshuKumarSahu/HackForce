@@ -5,7 +5,7 @@ event creation with deduplication, and state synchronization for trainsets.
 """
 
 from datetime import datetime
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
 import uuid
 
 # -----------------------------------------------------------------------------
@@ -73,7 +73,7 @@ class KochiMetroStateStore:
     def get_latest_telemetry(self, train_id: str) -> Optional[Dict[str, Any]]:
         return self._latest_telemetry.get(train_id.upper())
 
-    def record_telemetry(self, data: Dict[str, Any]) -> Tuple_List_Anomalies_Events:
+    def record_telemetry(self, data: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         """
         Ingests a new telemetry payload, updates current state, runs anomaly checks,
         and creates events with deduplication.

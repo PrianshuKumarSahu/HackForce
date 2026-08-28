@@ -228,7 +228,71 @@ class TestKochiMetroEngine(unittest.TestCase):
         train_obj = res_train.json()
         self.assertEqual(train_obj["telemetry"]["traction_motor_temp_c"], 105.0)
 
+    def test_10_locations_and_depots_api(self):
+        # 1. GET /api/v1/depots
+        res_depots = self.client.get("/api/v1/depots")
+        self.assertEqual(res_depots.status_code, 200)
+        depots_data = res_depots.json()
+        self.assertEqual(depots_data["total_depots"], 2)
+        depot_names = [d["name"] for d in depots_data["depots"]]
+        self.assertTrue(any("Muttom" in n for n in depot_names))
+
+        # 2. GET /api/v1/locations
+        res_locs = self.client.get("/api/v1/locations")
+        self.assertEqual(res_locs.status_code, 200)
+        locs_data = res_locs.json()
+        self.assertGreaterEqual(locs_data["total_locations"], 36)
+
+        # 3. GET /api/v1/locations/1 (Aluva Station)
+        res_loc_single = self.client.get("/api/v1/locations/1")
+        self.assertEqual(res_loc_single.status_code, 200)
+        loc_obj = res_loc_single.json()
+        self.assertEqual(loc_obj["location_id"], 1)
+        self.assertIn("Aluva", loc_obj["name"])
+
+        # 4. GET /api/v1/locations/999 (Invalid Location -> 404)
+        res_loc_bad = self.client.get("/api/v1/locations/999")
+        self.assertEqual(res_loc_bad.status_code, 404)
+
+        # 5. GET /api/v1/locations/5/connections (Muttom Station connections)
+        res_conn = self.client.get("/api/v1/locations/5/connections")
+        self.assertEqual(res_conn.status_code, 200)
+        conn_data = res_conn.json()
+        self.assertEqual(conn_data["location_id"], 5)
+        self.assertGreaterEqual(conn_data["total_connections"], 2)
+        first_conn = conn_data["connections"][0]
+        self.assertIn("distance_meters", first_conn)
+        self.assertIn("movement_time_minutes", first_conn)
+        self.assertIn("movement_cost", first_conn)
+
+        # 6. GET /api/v1/trains/KM-101/location
+        res_tloc = self.client.get("/api/v1/trains/KM-101/location")
+        self.assertEqual(res_tloc.status_code, 200)
+        tloc_data = res_tloc.json()
+        self.assertEqual(tloc_data["train_id"], "KM-101")
+        self.assertIn("location_id", tloc_data)
+
+        # 7. Telemetry validation: invalid location_id -> 422
+        bad_loc_payload = {
+            "train_id": "KM-101",
+            "location_id": 999
+        }
+        res_bad_loc = self.client.post("/api/v1/iot/telemetry", json=bad_loc_payload)
+        self.assertEqual(res_bad_loc.status_code, 422)
+
+        # 8. Telemetry update: valid location_id -> 200 and location updated
+        good_loc_payload = {
+            "train_id": "KM-101",
+            "location_id": 1
+        }
+        res_good_loc = self.client.post("/api/v1/iot/telemetry", json=good_loc_payload)
+        self.assertEqual(res_good_loc.status_code, 200)
+        
+        res_tloc_updated = self.client.get("/api/v1/trains/KM-101/location")
+        self.assertEqual(res_tloc_updated.json()["location_id"], 1)
+
 if __name__ == "__main__":
     unittest.main()
+
 
 

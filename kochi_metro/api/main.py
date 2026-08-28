@@ -10,10 +10,11 @@ from kochi_metro.optimizer.chart_optimizer import ResilienceChartOptimizer
 from kochi_metro.ml.chart_evaluator import ChartEfficiencyEvaluator
 from kochi_metro.ml.closed_loop import ClosedLoopSimulatorEngine
 from kochi_metro.data.state import state_store
+from kochi_metro.data.locations import location_manager
 
 app = FastAPI(
     title="Kochi Metro Next-Gen AI Operations & Prediction Engine API",
-    description="Production REST API providing ML predictions, CP-SAT resilience optimization, chart efficiency evaluation, IoT Telemetry ingestion, and Event management.",
+    description="Production REST API providing ML predictions, CP-SAT resilience optimization, chart efficiency evaluation, IoT Telemetry ingestion, Event management, and Location/Depot stabling topology.",
     version="1.0.0"
 )
 
@@ -62,6 +63,8 @@ class TrainTelemetryMetrics(BaseModel):
 class TrainDetailResponse(BaseModel):
     train_id: str = Field(..., description="Unique trainset identifier (e.g., 'KM-101')")
     train_type: str = Field("Alstom Metropolis 3-Car", description="Trainset manufacturer and car configuration")
+    current_location_id: int = Field(..., description="ID of current station or depot track location")
+    current_location_name: str = Field(..., description="Name of current location")
     health_score: float = Field(..., description="Overall health score (0.0 to 100.0)")
     next_day_failure_prob: float = Field(..., description="Predicted failure probability for next operating day (0.0 to 1.0)")
     consequence_score: float = Field(..., description="Consequence-weighted operational disruption impact score")
@@ -69,11 +72,67 @@ class TrainDetailResponse(BaseModel):
     primary_risk_subsystem: str = Field(..., description="Subsystem with the highest calculated risk")
     maintenance_urgency: str = Field(..., description="Maintenance urgency rating: 'HIGH', 'MEDIUM', or 'LOW'")
     telemetry: TrainTelemetryMetrics = Field(..., description="Raw operational telemetry metrics")
-    notes: Optional[str] = Field("Location tracking, fitness certs, and job-card status currently unpopulated in base telemetry.", description="Audit notes on unpopulated enterprise fields")
+    notes: Optional[str] = Field("Fitness certs and job-card status currently unpopulated in base telemetry.", description="Audit notes")
 
 class FleetTrainsResponse(BaseModel):
     total_trains: int = Field(..., description="Total count of trains returned")
     trains: List[TrainDetailResponse] = Field(..., description="List of train objects")
+
+# Pydantic Models for Depots & Locations
+class DepotSummaryResponse(BaseModel):
+    depot_id: str = Field(..., description="Depot code identifier")
+    name: str = Field(..., description="Full depot name")
+    total_stabling_lines: int = Field(..., description="Number of stabling lines")
+    total_inspection_bays: int = Field(..., description="Number of inspection bays")
+    total_capacity: int = Field(..., description="Maximum train capacity")
+    current_occupancy: int = Field(..., description="Current count of stabled trains")
+    available_capacity: int = Field(..., description="Remaining available stabling slots")
+    stabled_train_ids: List[str] = Field(..., description="IDs of trains currently stabled")
+    location_ids: List[int] = Field(..., description="Associated location IDs")
+
+class DepotsListResponse(BaseModel):
+    total_depots: int = Field(..., description="Total count of depots")
+    depots: List[DepotSummaryResponse] = Field(..., description="List of depot summaries")
+
+class LocationDetailResponse(BaseModel):
+    location_id: int = Field(..., description="Unique location integer ID")
+    name: str = Field(..., description="Location name")
+    depot: str = Field(..., description="Associated depot or line section")
+    type: str = Field(..., description="Location type ('MAINLINE_STATION', 'STABLING_LINE', 'INSPECTION_BAY', 'WASH_PLANT')")
+    capacity: int = Field(..., description="Maximum train capacity")
+    occupied_count: int = Field(..., description="Number of trains currently present")
+    available_capacity: int = Field(..., description="Available capacity slots")
+    stabled_train_ids: List[str] = Field(..., description="List of train IDs currently present")
+    is_depot_track: bool = Field(..., description="Whether this location is inside a depot facility")
+
+class LocationsListResponse(BaseModel):
+    total_locations: int = Field(..., description="Total count of locations")
+    locations: List[LocationDetailResponse] = Field(..., description="List of locations")
+
+class TrackConnectionResponse(BaseModel):
+    from_location_id: int = Field(..., description="Origin location ID")
+    from_location_name: str = Field(..., description="Origin location name")
+    to_location_id: int = Field(..., description="Destination location ID")
+    to_location_name: str = Field(..., description="Destination location name")
+    distance_meters: float = Field(..., description="Track distance in meters")
+    movement_time_minutes: float = Field(..., description="Estimated shunting/transit time in minutes")
+    movement_cost: float = Field(..., description="Energy/shunting cost index")
+    track_type: str = Field(..., description="Track classification ('MAINLINE', 'DEPOT_SHUNTING')")
+
+class LocationConnectionsResponse(BaseModel):
+    location_id: int = Field(..., description="Origin location ID")
+    location_name: str = Field(..., description="Origin location name")
+    total_connections: int = Field(..., description="Count of outbound track connections")
+    connections: List[TrackConnectionResponse] = Field(..., description="List of outbound track connections")
+
+class TrainLocationResponse(BaseModel):
+    train_id: str = Field(..., description="Trainset ID")
+    location_id: int = Field(..., description="Current location ID")
+    location_name: str = Field(..., description="Current location name")
+    depot: str = Field(..., description="Associated depot or mainline section")
+    type: str = Field(..., description="Location type")
+    is_depot_track: bool = Field(..., description="Whether train is parked in a depot track")
+
 
 # Pydantic Models for IoT Telemetry & Events
 class IoTTelemetryRequest(BaseModel):
@@ -143,9 +202,15 @@ def _get_all_trains_data() -> List[Dict[str, Any]]:
     for pred in predictions:
         t_id = pred["train_id"]
         raw = telemetry_map.get(t_id, {})
+        loc_id = location_manager.get_train_location_id(t_id) or 1
+        loc_details = location_manager.get_location_details(loc_id)
+        loc_name = loc_details["name"] if loc_details else "Unknown Location"
+
         train_data = {
             "train_id": t_id,
             "train_type": "Alstom Metropolis 3-Car",
+            "current_location_id": loc_id,
+            "current_location_name": loc_name,
             "health_score": pred["health_score"],
             "next_day_failure_prob": pred["next_day_failure_prob"],
             "consequence_score": pred["consequence_score"],
@@ -162,11 +227,10 @@ def _get_all_trains_data() -> List[Dict[str, Any]]:
                 "past_30d_delays": raw.get("past_30d_delays", 0),
                 "past_30d_faults": raw.get("past_30d_faults", 0)
             },
-            "notes": "Location tracking, fitness certs, and job-card status currently unpopulated in base telemetry."
+            "notes": "Fitness certs and job-card status currently unpopulated in base telemetry."
         }
         trains_list.append(train_data)
     return trains_list
-
 
 # Routes
 @app.get("/")
@@ -178,14 +242,100 @@ def read_root():
         "endpoints": [
             "/api/v1/trains",
             "/api/v1/trains/{train_id}",
+            "/api/v1/trains/{train_id}/location",
+            "/api/v1/depots",
+            "/api/v1/locations",
+            "/api/v1/locations/{location_id}",
+            "/api/v1/locations/{location_id}/connections",
+            "/api/v1/iot/telemetry",
+            "/api/v1/events",
             "/api/v1/fleet/health",
             "/api/v1/demand/crowding",
-            "/api/v1/chart/optimize",
-            "/api/v1/chart/evaluate",
-            "/api/v1/simulate/whatif",
-            "/api/v1/closed-loop/feedback"
+            "/api/v1/chart/optimize"
         ]
     }
+
+# -----------------------------------------------------------------------------
+# KMRL Location & Depot APIs
+# -----------------------------------------------------------------------------
+@app.get("/api/v1/depots", response_model=DepotsListResponse, tags=["Depots & Locations"])
+@app.get("/api/depots", response_model=DepotsListResponse, tags=["Depots & Locations"], include_in_schema=False)
+def get_all_depots():
+    """
+    Returns list of all KMRL depots (Muttom & Kakkanad) with capacity, line counts, and current occupancy.
+    """
+    depots = location_manager.get_depot_summaries()
+    return {
+        "total_depots": len(depots),
+        "depots": depots
+    }
+
+@app.get("/api/v1/locations", response_model=LocationsListResponse, tags=["Depots & Locations"])
+@app.get("/api/locations", response_model=LocationsListResponse, tags=["Depots & Locations"], include_in_schema=False)
+def get_all_locations():
+    """
+    Returns complete list of all 24 stations and depot tracks with capacities and current occupancy.
+    """
+    locations = location_manager.get_all_locations_with_occupancy()
+    return {
+        "total_locations": len(locations),
+        "locations": locations
+    }
+
+@app.get("/api/v1/locations/{location_id}", response_model=LocationDetailResponse, tags=["Depots & Locations"])
+@app.get("/api/locations/{location_id}", response_model=LocationDetailResponse, tags=["Depots & Locations"], include_in_schema=False)
+def get_location_by_id(location_id: int):
+    """
+    Returns detailed capacity, occupancy, and stabled train IDs for a specific location. Raises 404 if invalid.
+    """
+    details = location_manager.get_location_details(location_id)
+    if not details:
+        raise HTTPException(status_code=404, detail=f"Location ID '{location_id}' not found in network.")
+    return details
+
+@app.get("/api/v1/locations/{location_id}/connections", response_model=LocationConnectionsResponse, tags=["Depots & Locations"])
+@app.get("/api/locations/{location_id}/connections", response_model=LocationConnectionsResponse, tags=["Depots & Locations"], include_in_schema=False)
+def get_location_connections(location_id: int):
+    """
+    Returns outbound track connections from location_id including track distance, movement time, and shunting cost.
+    """
+    loc_details = location_manager.get_location_details(location_id)
+    if not loc_details:
+        raise HTTPException(status_code=404, detail=f"Location ID '{location_id}' not found in network.")
+
+    connections = location_manager.get_connections_for_location(location_id)
+    return {
+        "location_id": location_id,
+        "location_name": loc_details["name"],
+        "total_connections": len(connections),
+        "connections": connections
+    }
+
+@app.get("/api/v1/trains/{train_id}/location", response_model=TrainLocationResponse, tags=["Trains"])
+@app.get("/api/trains/{train_id}/location", response_model=TrainLocationResponse, tags=["Trains"], include_in_schema=False)
+def get_train_location(train_id: str):
+    """
+    Returns current location, depot name, track type, and stabling state of a specific trainset.
+    """
+    train_id_upper = train_id.upper()
+    valid_train_ids = [f"KM-{101 + i}" for i in range(25)]
+    if train_id_upper not in valid_train_ids:
+        raise HTTPException(status_code=404, detail=f"Train '{train_id}' not found in fleet.")
+
+    loc_id = location_manager.get_train_location_id(train_id_upper) or 1
+    loc_details = location_manager.get_location_details(loc_id)
+    if not loc_details:
+        raise HTTPException(status_code=500, detail=f"Location ID '{loc_id}' has invalid details.")
+
+    return {
+        "train_id": train_id_upper,
+        "location_id": loc_id,
+        "location_name": loc_details["name"],
+        "depot": loc_details["depot"],
+        "type": loc_details["type"],
+        "is_depot_track": loc_details["is_depot_track"]
+    }
+
 
 @app.get("/api/v1/trains", response_model=FleetTrainsResponse, tags=["Trains"])
 @app.get("/api/trains", response_model=FleetTrainsResponse, tags=["Trains"], include_in_schema=False)
@@ -232,6 +382,12 @@ def ingest_iot_telemetry(req: IoTTelemetryRequest):
     valid_train_ids = [f"KM-{101 + i}" for i in range(25)]
     if train_id_upper not in valid_train_ids:
         raise HTTPException(status_code=404, detail=f"Train '{req.train_id}' not found in fleet.")
+
+    # Validate location_id if provided
+    if req.location_id is not None:
+        if not location_manager.is_valid_location_id(req.location_id):
+            raise HTTPException(status_code=422, detail=f"Invalid location_id '{req.location_id}'. Location does not exist in network.")
+        location_manager.update_train_location(train_id_upper, req.location_id)
 
     # 2. Ingest telemetry into state store
     raw_dict = req.dict()
