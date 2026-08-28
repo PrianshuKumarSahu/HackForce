@@ -124,6 +124,135 @@ Returns detailed operational telemetry and ML health predictions for a specific 
 
 ---
 
+### 📡 IoT Telemetry & Event Ingestion APIs (Phase 5 & 6)
+
+#### Architecture & ESP32 / Simulator Compatibility
+The IoT ingestion layer accepts sensor telemetry payloads from an **ESP32 micro-controller**, **IoT simulator**, or **onboard sensor gateway**.
+Incoming telemetry payloads update the live operational state of the train, feed historical telemetry logs, run threshold-based anomaly checks, and automatically generate deduplicated system events.
+
+#### Configurable Anomaly Thresholds
+| Anomaly Code | Sensor Metric | Threshold Rule | Severity | Description |
+| :--- | :--- | :--- | :--- | :--- |
+| `HIGH_VIBRATION` | `vibration` | `>= 0.25` | `HIGH` | Excessive structural vibration detected on trainset. |
+| `HIGH_TRACTION_TEMPERATURE` | `traction_motor_temp_c` | `>= 95.0` °C | `CRITICAL` | Motor temperature exceeded thermal safety limit. |
+| `HVAC_LOW_PRESSURE` | `hvac_pressure_psi` | `<= 40.0` PSI | `MEDIUM` | HVAC refrigerant pressure below operational limit. |
+| `HVAC_HIGH_PRESSURE` | `hvac_pressure_psi` | `>= 75.0` PSI | `MEDIUM` | HVAC pressure exceeded high-pressure limit. |
+| `BRAKE_WEAR_CRITICAL` | `brake_pad_wear_pct` | `>= 85.0` % | `HIGH` | Brake pad wear reached critical replacement limit. |
+| `DOOR_CYCLES_WARNING` | `door_cycles` | `>= 75,000` | `LOW` | Door cycles reached overhaul inspection threshold. |
+
+---
+
+#### 1. `POST /api/v1/iot/telemetry`
+Ingests live sensor telemetry for a train set.
+
+**Sample Request (cURL)**:
+```bash
+curl -X POST "http://127.0.0.1:8000/api/v1/iot/telemetry" \
+     -H "Content-Type: application/json" \
+     -d '{
+           "train_id": "KM-101",
+           "temperature_c": 28.4,
+           "humidity_pct": 61.0,
+           "vibration": 0.45,
+           "brake_pad_wear_pct": 34.2,
+           "door_cycles": 18450,
+           "hvac_pressure_psi": 61.5,
+           "traction_motor_temp_c": 105.0,
+           "mileage_km": 42100.5,
+           "location_id": 2
+         }'
+```
+
+**Sample Response (`200 OK` - Accepted with Alert)**:
+```json
+{
+  "status": "accepted_with_alert",
+  "train_id": "KM-101",
+  "anomalies": [
+    {
+      "type": "HIGH_VIBRATION",
+      "severity": "HIGH",
+      "description": "Unusually high structural vibration detected on trainset."
+    },
+    {
+      "type": "HIGH_TRACTION_TEMPERATURE",
+      "severity": "CRITICAL",
+      "description": "Traction motor temperature exceeded thermal safety limit (95.0°C)."
+    }
+  ],
+  "event_ids": [
+    "EVT-A1B2C3D4",
+    "EVT-E5F6G7H8"
+  ],
+  "timestamp": "2026-08-29T02:25:00.000000"
+}
+```
+
+---
+
+#### 2. `GET /api/v1/iot/{train_id}/telemetry`
+Retrieves historical telemetry log entries for a train (newest first).
+
+**Sample Request**: `GET /api/v1/iot/KM-101/telemetry?limit=20`  
+**Sample Response (`200 OK`)**:
+```json
+{
+  "train_id": "KM-101",
+  "record_count": 1,
+  "history": [
+    {
+      "id": "TEL-9F8E7D6C",
+      "train_id": "KM-101",
+      "timestamp": "2026-08-29T02:25:00.000000",
+      "temperature_c": 28.4,
+      "humidity_pct": 61.0,
+      "vibration": 0.45,
+      "brake_pad_wear_pct": 34.2,
+      "door_cycles": 18450,
+      "hvac_pressure_psi": 61.5,
+      "traction_motor_temp_c": 105.0,
+      "mileage_km": 42100.5,
+      "location_id": 2,
+      "source": "IOT"
+    }
+  ]
+}
+```
+
+---
+
+#### 3. `GET /api/v1/events` (Alias: `GET /api/events`)
+Queries all system events and IoT alerts with optional filters (`train_id`, `severity`, `status`, `source`).
+
+**Sample Request**: `GET /api/v1/events?train_id=KM-101&severity=CRITICAL`  
+**Sample Response (`200 OK`)**:
+```json
+{
+  "total_events": 1,
+  "events": [
+    {
+      "event_id": "EVT-E5F6G7H8",
+      "train_id": "KM-101",
+      "event_type": "HIGH_TRACTION_TEMPERATURE",
+      "severity": "CRITICAL",
+      "description": "Traction motor temperature exceeded thermal safety limit (95.0°C).",
+      "source": "IOT",
+      "occurred_at": "2026-08-29T02:25:00.000000",
+      "processed_at": "2026-08-29T02:25:00.005000",
+      "status": "OPEN"
+    }
+  ]
+}
+```
+
+#### 4. `GET /api/v1/events/{event_id}`
+Retrieves specific event detail by ID.
+
+#### 5. `GET /api/v1/trains/{train_id}/events`
+Retrieves all events logged for a specific train unit.
+
+---
+
 ### 🔮 Additional Engine Endpoints
 
 - `GET /api/v1/fleet/health` - Subsystem risk breakdown across the fleet.
@@ -138,4 +267,5 @@ Returns detailed operational telemetry and ML health predictions for a specific 
 ## 📌 Field Availability Notice
 
 * **Available Fields**: `train_id`, `train_type`, `health_score`, `next_day_failure_prob`, `consequence_score`, `subsystem_risks` (`brakes`, `doors`, `hvac`, `traction`), `primary_risk_subsystem`, `maintenance_urgency`, `brake_pad_wear_pct`, `door_cycles`, `hvac_pressure_psi`, `traction_motor_temp_c`, `mileage_km`, `days_since_ibl`, `past_30d_delays`, `past_30d_faults`.
-* **Currently Unpopulated Fields**: GPS real-time location, fitness certificate expiry dates, job-card status, and branding priority (to be connected in IoT / Eligibility phases).
+* **Live IoT Overlay**: Submitting IoT telemetry via `POST /api/v1/iot/telemetry` dynamically overlays live sensor readings onto `GET /api/v1/trains` and `GET /api/v1/trains/{train_id}`!
+

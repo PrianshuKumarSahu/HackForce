@@ -1,3 +1,4 @@
+from datetime import datetime
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional
@@ -8,10 +9,11 @@ from kochi_metro.ml.demand_predictor import PassengerDemandPredictor
 from kochi_metro.optimizer.chart_optimizer import ResilienceChartOptimizer
 from kochi_metro.ml.chart_evaluator import ChartEfficiencyEvaluator
 from kochi_metro.ml.closed_loop import ClosedLoopSimulatorEngine
+from kochi_metro.data.state import state_store
 
 app = FastAPI(
     title="Kochi Metro Next-Gen AI Operations & Prediction Engine API",
-    description="Production REST API providing ML predictions, CP-SAT resilience optimization, chart efficiency evaluation, and What-If disruption simulations.",
+    description="Production REST API providing ML predictions, CP-SAT resilience optimization, chart efficiency evaluation, IoT Telemetry ingestion, and Event management.",
     version="1.0.0"
 )
 
@@ -73,11 +75,68 @@ class FleetTrainsResponse(BaseModel):
     total_trains: int = Field(..., description="Total count of trains returned")
     trains: List[TrainDetailResponse] = Field(..., description="List of train objects")
 
-# Helper function to compile complete train objects
+# Pydantic Models for IoT Telemetry & Events
+class IoTTelemetryRequest(BaseModel):
+    train_id: str = Field(..., description="Target train ID (e.g. 'KM-101')")
+    temperature_c: Optional[float] = Field(25.0, ge=-50.0, le=100.0, description="Ambient compartment temperature in Celsius")
+    humidity_pct: Optional[float] = Field(50.0, ge=0.0, le=100.0, description="Ambient humidity percentage")
+    vibration: Optional[float] = Field(0.05, ge=0.0, le=50.0, description="Structural vibration level")
+    brake_pad_wear_pct: Optional[float] = Field(30.0, ge=0.0, le=100.0, description="Brake pad wear percentage")
+    door_cycles: Optional[int] = Field(10000, ge=0, description="Total door cycles")
+    hvac_pressure_psi: Optional[float] = Field(60.0, ge=0.0, le=200.0, description="HVAC pressure in PSI")
+    traction_motor_temp_c: Optional[float] = Field(60.0, ge=-50.0, le=200.0, description="Traction motor temperature in Celsius")
+    mileage_km: Optional[float] = Field(10000.0, ge=0.0, description="Total mileage in km")
+    location_id: Optional[int] = Field(1, ge=1, description="Station or depot location ID")
+    timestamp: Optional[str] = Field(None, description="ISO timestamp string")
+
+class AnomalyDetail(BaseModel):
+    type: str = Field(..., description="Anomaly classification code")
+    severity: str = Field(..., description="Severity level: 'CRITICAL', 'HIGH', 'MEDIUM', 'LOW'")
+    description: str = Field(..., description="Detailed anomaly narrative")
+
+class IoTTelemetryResponse(BaseModel):
+    status: str = Field(..., description="'accepted' or 'accepted_with_alert'")
+    train_id: str = Field(..., description="Target train ID")
+    anomalies: List[AnomalyDetail] = Field(default_factory=list, description="Detected telemetry anomalies")
+    event_ids: List[str] = Field(default_factory=list, description="IDs of newly created events")
+    timestamp: str = Field(..., description="Processing timestamp")
+
+class EventDetailResponse(BaseModel):
+    event_id: str = Field(..., description="Unique event identifier")
+    train_id: str = Field(..., description="Associated train ID")
+    event_type: str = Field(..., description="Event rule type")
+    severity: str = Field(..., description="Event severity rating")
+    description: str = Field(..., description="Event description")
+    source: str = Field("IOT", description="Originating source")
+    occurred_at: str = Field(..., description="Timestamp when event occurred")
+    processed_at: str = Field(..., description="Timestamp when event was ingested")
+    status: str = Field("OPEN", description="Event lifecycle status")
+
+class EventsListResponse(BaseModel):
+    total_events: int = Field(..., description="Total count of matching events")
+    events: List[EventDetailResponse] = Field(..., description="List of event objects")
+
+class TelemetryHistoryResponse(BaseModel):
+    train_id: str = Field(..., description="Target train ID")
+    record_count: int = Field(..., description="Count of historical telemetry records returned")
+    history: List[Dict[str, Any]] = Field(..., description="List of telemetry records")
+
+# Helper function to compile complete train objects with live IoT overlay
 def _get_all_trains_data() -> List[Dict[str, Any]]:
     fleet_status_df = data_gen.generate_current_fleet_status()
-    predictions = health_predictor.predict_fleet_health(fleet_status_df)
     
+    # Overlay live IoT telemetry if recorded
+    for idx, row in fleet_status_df.iterrows():
+        t_id = row["train_id"]
+        latest_iot = state_store.get_latest_telemetry(t_id)
+        if latest_iot:
+            fleet_status_df.at[idx, "brake_pad_wear_pct"] = latest_iot["brake_pad_wear_pct"]
+            fleet_status_df.at[idx, "door_cycles"] = latest_iot["door_cycles"]
+            fleet_status_df.at[idx, "hvac_pressure_psi"] = latest_iot["hvac_pressure_psi"]
+            fleet_status_df.at[idx, "traction_motor_temp_c"] = latest_iot["traction_motor_temp_c"]
+            fleet_status_df.at[idx, "mileage_km"] = latest_iot["mileage_km"]
+
+    predictions = health_predictor.predict_fleet_health(fleet_status_df)
     telemetry_map = {row["train_id"]: row.to_dict() for _, row in fleet_status_df.iterrows()}
     
     trains_list = []
@@ -107,6 +166,7 @@ def _get_all_trains_data() -> List[Dict[str, Any]]:
         }
         trains_list.append(train_data)
     return trains_list
+
 
 # Routes
 @app.get("/")
@@ -155,6 +215,107 @@ def get_train_by_id(train_id: str):
         if train["train_id"].upper() == train_id.upper():
             return train
     raise HTTPException(status_code=404, detail=f"Train '{train_id}' not found in fleet.")
+
+# -----------------------------------------------------------------------------
+# IoT Telemetry & Anomaly Ingestion APIs (Phase 5)
+# -----------------------------------------------------------------------------
+@app.post("/api/v1/iot/telemetry", response_model=IoTTelemetryResponse, tags=["IoT Telemetry"])
+def ingest_iot_telemetry(req: IoTTelemetryRequest):
+    """
+    Ingests live sensor telemetry payload from IoT sensors (ESP32) or simulator.
+    
+    Validates train_id, runs threshold-based anomaly detection, creates events for alerts,
+    updates train state, and stores record in telemetry history.
+    """
+    # 1. Validate train_id exists in fleet
+    train_id_upper = req.train_id.upper()
+    valid_train_ids = [f"KM-{101 + i}" for i in range(25)]
+    if train_id_upper not in valid_train_ids:
+        raise HTTPException(status_code=404, detail=f"Train '{req.train_id}' not found in fleet.")
+
+    # 2. Ingest telemetry into state store
+    raw_dict = req.dict()
+    anomalies, created_events = state_store.record_telemetry(raw_dict)
+
+    status_str = "accepted_with_alert" if anomalies else "accepted"
+    event_ids = [e["event_id"] for e in created_events]
+    timestamp_str = req.timestamp or datetime.now().isoformat()
+
+    return {
+        "status": status_str,
+        "train_id": train_id_upper,
+        "anomalies": anomalies,
+        "event_ids": event_ids,
+        "timestamp": timestamp_str
+    }
+
+@app.get("/api/v1/iot/{train_id}/telemetry", response_model=TelemetryHistoryResponse, tags=["IoT Telemetry"])
+def get_train_telemetry_history(
+    train_id: str,
+    limit: int = Query(20, ge=1, le=500, description="Max historical telemetry records to return")
+):
+    """
+    Returns recent telemetry history logs for a specific train set (newest first).
+    """
+    train_id_upper = train_id.upper()
+    valid_train_ids = [f"KM-{101 + i}" for i in range(25)]
+    if train_id_upper not in valid_train_ids:
+        raise HTTPException(status_code=404, detail=f"Train '{train_id}' not found in fleet.")
+
+    history = state_store.get_telemetry_history(train_id_upper, limit=limit)
+    return {
+        "train_id": train_id_upper,
+        "record_count": len(history),
+        "history": history
+    }
+
+# -----------------------------------------------------------------------------
+# Event Management APIs (Phase 6)
+# -----------------------------------------------------------------------------
+@app.get("/api/v1/events", response_model=EventsListResponse, tags=["Events"])
+@app.get("/api/events", response_model=EventsListResponse, tags=["Events"], include_in_schema=False)
+def get_all_events(
+    train_id: Optional[str] = Query(None, description="Filter events by train ID (e.g. 'KM-101')"),
+    severity: Optional[str] = Query(None, description="Filter by severity: 'CRITICAL', 'HIGH', 'MEDIUM', 'LOW'"),
+    status: Optional[str] = Query(None, description="Filter by status: 'OPEN', 'RESOLVED'"),
+    source: Optional[str] = Query(None, description="Filter by source: 'IOT'")
+):
+    """
+    Returns system events and IoT anomaly alerts with optional filters.
+    """
+    events = state_store.get_events(train_id=train_id, severity=severity, status=status, source=source)
+    return {
+        "total_events": len(events),
+        "events": events
+    }
+
+@app.get("/api/v1/events/{event_id}", response_model=EventDetailResponse, tags=["Events"])
+def get_event_by_id(event_id: str):
+    """
+    Returns details for a specific event by event_id. Raises 404 if not found.
+    """
+    event = state_store.get_event_by_id(event_id)
+    if not event:
+        raise HTTPException(status_code=404, detail=f"Event '{event_id}' not found.")
+    return event
+
+@app.get("/api/v1/trains/{train_id}/events", response_model=EventsListResponse, tags=["Events"])
+@app.get("/api/trains/{train_id}/events", response_model=EventsListResponse, tags=["Events"], include_in_schema=False)
+def get_events_for_train(train_id: str):
+    """
+    Returns all event records associated with a specific train set.
+    """
+    train_id_upper = train_id.upper()
+    valid_train_ids = [f"KM-{101 + i}" for i in range(25)]
+    if train_id_upper not in valid_train_ids:
+        raise HTTPException(status_code=404, detail=f"Train '{train_id}' not found in fleet.")
+
+    events = state_store.get_events(train_id=train_id_upper)
+    return {
+        "total_events": len(events),
+        "events": events
+    }
+
 
 
 @app.get("/api/v1/fleet/health")

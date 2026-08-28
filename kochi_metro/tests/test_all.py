@@ -147,6 +147,88 @@ class TestKochiMetroEngine(unittest.TestCase):
         self.assertEqual(res_invalid.status_code, 404)
         self.assertIn("not found", res_invalid.json()["detail"].lower())
 
+    def test_09_iot_telemetry_and_events(self):
+        # 1. Normal telemetry payload -> Accepted without alerts
+        normal_payload = {
+            "train_id": "KM-101",
+            "vibration": 0.08,
+            "traction_motor_temp_c": 62.0,
+            "brake_pad_wear_pct": 35.0,
+            "door_cycles": 12000,
+            "hvac_pressure_psi": 58.0,
+            "mileage_km": 45000.0,
+            "location_id": 2
+        }
+        res_norm = self.client.post("/api/v1/iot/telemetry", json=normal_payload)
+        self.assertEqual(res_norm.status_code, 200)
+        norm_data = res_norm.json()
+        self.assertEqual(norm_data["status"], "accepted")
+        self.assertEqual(norm_data["train_id"], "KM-101")
+        self.assertEqual(len(norm_data["anomalies"]), 0)
+
+        # 2. Unknown train ID -> 404 Not Found
+        bad_train_payload = dict(normal_payload, train_id="KM-999")
+        res_bad_train = self.client.post("/api/v1/iot/telemetry", json=bad_train_payload)
+        self.assertEqual(res_bad_train.status_code, 404)
+
+        # 3. Invalid telemetry values -> 422 Unprocessable Entity (Validation error)
+        invalid_val_payload = dict(normal_payload, vibration=-1.0)
+        res_invalid = self.client.post("/api/v1/iot/telemetry", json=invalid_val_payload)
+        self.assertEqual(res_invalid.status_code, 422)
+
+        # 4. Anomaly payload: High vibration & high motor temperature
+        anomaly_payload = {
+            "train_id": "KM-101",
+            "vibration": 0.45,  # Threshold > 0.25
+            "traction_motor_temp_c": 105.0,  # Threshold >= 95.0
+            "brake_pad_wear_pct": 40.0
+        }
+        res_anom = self.client.post("/api/v1/iot/telemetry", json=anomaly_payload)
+        self.assertEqual(res_anom.status_code, 200)
+        anom_data = res_anom.json()
+        self.assertEqual(anom_data["status"], "accepted_with_alert")
+        self.assertEqual(len(anom_data["anomalies"]), 2)
+        anomaly_types = [a["type"] for a in anom_data["anomalies"]]
+        self.assertIn("HIGH_VIBRATION", anomaly_types)
+        self.assertIn("HIGH_TRACTION_TEMPERATURE", anomaly_types)
+        self.assertGreaterEqual(len(anom_data["event_ids"]), 1)
+
+        # 5. Deduplication check: Sending identical payload immediately should not create duplicate events
+        res_anom_dup = self.client.post("/api/v1/iot/telemetry", json=anomaly_payload)
+        self.assertEqual(res_anom_dup.status_code, 200)
+        dup_data = res_anom_dup.json()
+        self.assertEqual(len(dup_data["event_ids"]), 0)  # Deduplicated
+
+        # 6. Retrieve telemetry history
+        res_hist = self.client.get("/api/v1/iot/KM-101/telemetry?limit=10")
+        self.assertEqual(res_hist.status_code, 200)
+        hist_data = res_hist.json()
+        self.assertEqual(hist_data["train_id"], "KM-101")
+        self.assertGreaterEqual(hist_data["record_count"], 3)
+
+        # 7. Retrieve events
+        res_events = self.client.get("/api/v1/events?train_id=KM-101")
+        self.assertEqual(res_events.status_code, 200)
+        events_data = res_events.json()
+        self.assertGreaterEqual(events_data["total_events"], 2)
+
+        # Retrieve specific event by ID
+        event_id = events_data["events"][0]["event_id"]
+        res_single_evt = self.client.get(f"/api/v1/events/{event_id}")
+        self.assertEqual(res_single_evt.status_code, 200)
+        self.assertEqual(res_single_evt.json()["event_id"], event_id)
+
+        # Retrieve events via train sub-resource
+        res_train_evts = self.client.get("/api/v1/trains/KM-101/events")
+        self.assertEqual(res_train_evts.status_code, 200)
+
+        # 8. Verify TRAIN API reflects updated IoT telemetry overlay
+        res_train = self.client.get("/api/v1/trains/KM-101")
+        self.assertEqual(res_train.status_code, 200)
+        train_obj = res_train.json()
+        self.assertEqual(train_obj["telemetry"]["traction_motor_temp_c"], 105.0)
+
 if __name__ == "__main__":
     unittest.main()
+
 
