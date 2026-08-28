@@ -351,6 +351,155 @@ class TestKochiMetroEngine(unittest.TestCase):
         self.assertTrue(res_recheck.json()["is_fit_for_service"])
         self.assertEqual(res_recheck.json()["overall_fitness_status"], "FIT_FOR_SERVICE")
 
+    def test_12_job_cards_api(self):
+        # -----------------------------------------------------------------------
+        # Test Case 1: Open CRITICAL job card (KM-101)
+        # -----------------------------------------------------------------------
+        res = self.client.get("/api/v1/trains/KM-101/job-cards")
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["train_id"], "KM-101")
+        self.assertGreaterEqual(data["total_jobs"], 1)
+        self.assertGreaterEqual(data["open_critical_jobs_count"], 1)
+
+        # Verify the critical preset job is present
+        jobs = data["job_cards"]
+        critical_jobs = [j for j in jobs if j["is_critical"]]
+        self.assertGreaterEqual(len(critical_jobs), 1)
+        crit = critical_jobs[0]
+        self.assertIn(crit["status"], ["OPEN", "IN_PROGRESS"])
+        self.assertIn(crit["priority"], ["CRITICAL", "HIGH"])
+        self.assertTrue(crit["is_critical"])
+        self.assertIn("job_id", crit)
+        self.assertIn("job_number", crit)
+        self.assertIn("due_date", crit)
+        self.assertIn("estimated_duration_hours", crit)
+        self.assertIn("source", crit)
+
+        # Retrieve that job by ID
+        job_id = crit["job_id"]
+        res_single = self.client.get(f"/api/v1/job-cards/{job_id}")
+        self.assertEqual(res_single.status_code, 200)
+        self.assertEqual(res_single.json()["job_id"], job_id)
+        self.assertTrue(res_single.json()["is_critical"])
+
+        # is_critical filter
+        res_crit_filter = self.client.get("/api/v1/trains/KM-101/job-cards?is_critical=true")
+        self.assertEqual(res_crit_filter.status_code, 200)
+        for j in res_crit_filter.json()["job_cards"]:
+            self.assertTrue(j["is_critical"])
+
+        # -----------------------------------------------------------------------
+        # Test Case 2: Closed / completed job card (KM-102)
+        # -----------------------------------------------------------------------
+        res_closed = self.client.get("/api/v1/trains/KM-102/job-cards?status=COMPLETED")
+        self.assertEqual(res_closed.status_code, 200)
+        closed_data = res_closed.json()
+        self.assertGreaterEqual(closed_data["total_jobs"], 1)
+        for j in closed_data["job_cards"]:
+            self.assertEqual(j["status"], "COMPLETED")
+            self.assertFalse(j["is_critical"])  # Closed jobs are never critical
+
+        # -----------------------------------------------------------------------
+        # Test Case 3: Overdue job card (KM-103 - due 2 days ago, still OPEN)
+        # -----------------------------------------------------------------------
+        res_overdue = self.client.get("/api/v1/trains/KM-103/job-cards")
+        self.assertEqual(res_overdue.status_code, 200)
+        overdue_jobs = [j for j in res_overdue.json()["job_cards"] if j["is_overdue"]]
+        self.assertGreaterEqual(len(overdue_jobs), 1)
+        overdue = overdue_jobs[0]
+        self.assertIn(overdue["status"], ["OPEN", "IN_PROGRESS"])
+        self.assertTrue(overdue["is_overdue"])
+
+        # -----------------------------------------------------------------------
+        # Test Case 4: Invalid train ID -> 404
+        # -----------------------------------------------------------------------
+        res_bad_train = self.client.get("/api/v1/trains/KM-999/job-cards")
+        self.assertEqual(res_bad_train.status_code, 404)
+        self.assertIn("not found", res_bad_train.json()["detail"].lower())
+
+        # -----------------------------------------------------------------------
+        # Test Case 5: Invalid job ID -> 404
+        # -----------------------------------------------------------------------
+        res_bad_job = self.client.get("/api/v1/job-cards/JC-INVALID-9999")
+        self.assertEqual(res_bad_job.status_code, 404)
+        self.assertIn("not found", res_bad_job.json()["detail"].lower())
+
+        # -----------------------------------------------------------------------
+        # POST: Create a new CRITICAL emergency job card
+        # -----------------------------------------------------------------------
+        create_payload = {
+            "train_id": "KM-110",
+            "description": "Pantograph arm fracture - emergency replacement required",
+            "category": "EMERGENCY_REPAIR",
+            "priority": "CRITICAL",
+            "estimated_duration_hours": 6.0,
+            "source": "MAXIMO_CMMS"
+        }
+        res_create = self.client.post("/api/v1/job-cards", json=create_payload)
+        self.assertEqual(res_create.status_code, 201)
+        new_job = res_create.json()
+        self.assertEqual(new_job["train_id"], "KM-110")
+        self.assertEqual(new_job["status"], "OPEN")
+        self.assertEqual(new_job["priority"], "CRITICAL")
+        self.assertEqual(new_job["category"], "EMERGENCY_REPAIR")
+        self.assertTrue(new_job["is_critical"])
+        self.assertFalse(new_job["is_overdue"])
+        new_job_id = new_job["job_id"]
+
+        # Verify it now appears in KM-110's job list
+        res_km110 = self.client.get("/api/v1/trains/KM-110/job-cards")
+        job_ids = [j["job_id"] for j in res_km110.json()["job_cards"]]
+        self.assertIn(new_job_id, job_ids)
+
+        # -----------------------------------------------------------------------
+        # PATCH: Update job card status to IN_PROGRESS, then COMPLETED
+        # -----------------------------------------------------------------------
+        res_patch = self.client.patch(f"/api/v1/job-cards/{new_job_id}", json={"status": "IN_PROGRESS"})
+        self.assertEqual(res_patch.status_code, 200)
+        self.assertEqual(res_patch.json()["status"], "IN_PROGRESS")
+        self.assertTrue(res_patch.json()["is_critical"])  # Still critical while in-progress
+
+        res_complete = self.client.patch(f"/api/v1/job-cards/{new_job_id}", json={"status": "COMPLETED"})
+        self.assertEqual(res_complete.status_code, 200)
+        self.assertEqual(res_complete.json()["status"], "COMPLETED")
+        self.assertFalse(res_complete.json()["is_critical"])  # No longer critical when closed
+
+        # -----------------------------------------------------------------------
+        # POST: Invalid train ID -> 404
+        # -----------------------------------------------------------------------
+        res_bad_create = self.client.post("/api/v1/job-cards", json={
+            "train_id": "KM-999",
+            "description": "Bogus job for invalid train"
+        })
+        self.assertEqual(res_bad_create.status_code, 404)
+
+        # -----------------------------------------------------------------------
+        # POST: Invalid category enum -> 422
+        # -----------------------------------------------------------------------
+        res_bad_cat = self.client.post("/api/v1/job-cards", json={
+            "train_id": "KM-101",
+            "description": "Test job",
+            "category": "INVALID_CATEGORY"
+        })
+        self.assertEqual(res_bad_cat.status_code, 422)
+
+        # -----------------------------------------------------------------------
+        # PATCH: Invalid job_id -> 404
+        # -----------------------------------------------------------------------
+        res_bad_patch = self.client.patch("/api/v1/job-cards/JC-NONEXISTENT", json={"status": "COMPLETED"})
+        self.assertEqual(res_bad_patch.status_code, 404)
+
+        # -----------------------------------------------------------------------
+        # Train fleet API: open_critical_jobs_count present and correct for KM-101
+        # -----------------------------------------------------------------------
+        res_fleet = self.client.get("/api/v1/trains/KM-101")
+        self.assertEqual(res_fleet.status_code, 200)
+        fleet_train = res_fleet.json()
+        self.assertIn("open_critical_jobs_count", fleet_train)
+        self.assertGreaterEqual(fleet_train["open_critical_jobs_count"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()
 

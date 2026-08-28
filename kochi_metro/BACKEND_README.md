@@ -438,10 +438,114 @@ Issues or updates a department safety certificate.
 
 ---
 
+### 🔧 Job Card & CMMS Work Order APIs (Phase 8)
+
+Provides full CRUD interface to Maximo CMMS maintenance job cards covering preventive, corrective, inspection, emergency, and overhaul categories.
+
+#### Categories
+`PREVENTIVE_MAINTENANCE`, `CORRECTIVE_MAINTENANCE`, `INSPECTION`, `OVERHAUL`, `EMERGENCY_REPAIR`
+
+#### Priorities
+`CRITICAL`, `HIGH`, `MEDIUM`, `LOW`
+
+#### Statuses
+`OPEN`, `IN_PROGRESS`, `COMPLETED`, `CANCELLED`
+
+#### Criticality Logic
+A job is **`is_critical = true`** if its status is `OPEN` or `IN_PROGRESS` AND its priority is `CRITICAL` or `HIGH`.
+A job is **`is_overdue = true`** if its status is `OPEN` or `IN_PROGRESS` AND its `due_date` is strictly in the past.
+
+---
+
+#### 1. `GET /api/v1/trains/{train_id}/job-cards`
+Returns all maintenance job cards for a trainset. Supports optional filters:
+- `?status=OPEN` — Filter by lifecycle status
+- `?priority=CRITICAL` — Filter by priority level
+- `?category=EMERGENCY_REPAIR` — Filter by job category
+- `?is_critical=true` — Return only open CRITICAL/HIGH priority jobs
+
+**Sample Response (`200 OK`)**:
+```json
+{
+  "train_id": "KM-101",
+  "total_jobs": 1,
+  "open_critical_jobs_count": 1,
+  "job_cards": [
+    {
+      "job_id": "JC-1001",
+      "job_number": "JOB-2026-8810",
+      "train_id": "KM-101",
+      "description": "Traction Motor Thermal Alert & Brake Pad Wear Inspection",
+      "category": "EMERGENCY_REPAIR",
+      "priority": "CRITICAL",
+      "status": "OPEN",
+      "due_date": "2026-08-28T10:00:00",
+      "estimated_duration_hours": 3.5,
+      "source": "TELEMETRY_ALERT",
+      "created_at": "2026-08-28T08:00:00",
+      "updated_at": "2026-08-28T08:00:00",
+      "is_critical": true,
+      "is_overdue": false
+    }
+  ]
+}
+```
+
+---
+
+#### 2. `GET /api/v1/job-cards/{job_id}`
+Returns a specific job card by ID. Includes live `is_critical` and `is_overdue` flags.
+
+**Error Cases**:
+- `404 Not Found` — `job_id` not found in CMMS.
+
+---
+
+#### 3. `POST /api/v1/job-cards`
+Creates a new job card. `job_id` and `job_number` are auto-generated. Status defaults to `OPEN`.
+
+**Request Body**:
+```json
+{
+  "train_id": "KM-110",
+  "description": "Pantograph arm fracture - emergency replacement required",
+  "category": "EMERGENCY_REPAIR",
+  "priority": "CRITICAL",
+  "estimated_duration_hours": 6.0,
+  "source": "MAXIMO_CMMS"
+}
+```
+
+**Error Cases**:
+- `404 Not Found` — `train_id` is not a valid KMRL fleet unit.
+- `422 Unprocessable Entity` — Invalid `category` or `priority` enum value.
+
+**Returns**: `201 Created` with the created `JobCardResponse`.
+
+---
+
+#### 4. `PATCH /api/v1/job-cards/{job_id}`
+Partially updates an existing job card. Allowed fields: `status`, `priority`, `description`, `due_date`.
+
+**Request Body**:
+```json
+{
+  "status": "COMPLETED"
+}
+```
+
+**Error Cases**:
+- `404 Not Found` — `job_id` not found.
+- `422 Unprocessable Entity` — Invalid `status` or `priority` enum.
+
+---
+
 ## 📌 Field Availability Notice
 
-* **Available Fields**: `train_id`, `train_type`, `current_location_id`, `current_location_name`, `is_fit_for_service`, `overall_fitness_status`, `health_score`, `next_day_failure_prob`, `consequence_score`, `subsystem_risks` (`brakes`, `doors`, `hvac`, `traction`), `primary_risk_subsystem`, `maintenance_urgency`, `brake_pad_wear_pct`, `door_cycles`, `hvac_pressure_psi`, `traction_motor_temp_c`, `mileage_km`, `days_since_ibl`, `past_30d_delays`, `past_30d_faults`.
-* **Live Safety & IoT Overlay**: Expiration or revocation of safety certificates immediately updates `is_fit_for_service` across all train endpoints!
+* **Available Fields**: `train_id`, `train_type`, `current_location_id`, `current_location_name`, `is_fit_for_service`, `overall_fitness_status`, `open_critical_jobs_count`, `health_score`, `next_day_failure_prob`, `consequence_score`, `subsystem_risks` (`brakes`, `doors`, `hvac`, `traction`), `primary_risk_subsystem`, `maintenance_urgency`, `brake_pad_wear_pct`, `door_cycles`, `hvac_pressure_psi`, `traction_motor_temp_c`, `mileage_km`, `days_since_ibl`, `past_30d_delays`, `past_30d_faults`.
+* **Live Safety & IoT Overlay**: Expiration or revocation of safety certificates immediately updates `is_fit_for_service` across all train endpoints.
+* **Job Card Overlay**: `open_critical_jobs_count` is live-computed on every `GET /api/v1/trains` and `GET /api/v1/trains/{train_id}` call.
+
 
 
 

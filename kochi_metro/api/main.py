@@ -12,10 +12,11 @@ from kochi_metro.ml.closed_loop import ClosedLoopSimulatorEngine
 from kochi_metro.data.state import state_store
 from kochi_metro.data.locations import location_manager
 from kochi_metro.data.fitness import fitness_manager, DEPARTMENTS
+from kochi_metro.data.job_cards import job_card_manager, CATEGORIES, PRIORITIES, STATUSES
 
 app = FastAPI(
     title="Kochi Metro Next-Gen AI Operations & Prediction Engine API",
-    description="Production REST API providing ML predictions, CP-SAT resilience optimization, chart efficiency evaluation, IoT Telemetry ingestion, Event management, Location/Depot stabling topology, and Fitness Certificate safety verification.",
+    description="Production REST API providing ML predictions, CP-SAT resilience optimization, chart efficiency evaluation, IoT Telemetry ingestion, Event management, Location/Depot stabling topology, Fitness Certificate safety verification, and Job Card CMMS work order tracking.",
     version="1.0.0"
 )
 
@@ -68,6 +69,7 @@ class TrainDetailResponse(BaseModel):
     current_location_name: str = Field(..., description="Name of current location")
     is_fit_for_service: bool = Field(..., description="True if all 3 mandatory department fitness certs (Rolling Stock, Signalling, Telecom) are valid now")
     overall_fitness_status: str = Field(..., description="'FIT_FOR_SERVICE' or 'UNFIT_SAFETY_CERTIFICATE_EXPIRED'")
+    open_critical_jobs_count: int = Field(..., description="Count of open CRITICAL or HIGH priority maintenance job cards")
     health_score: float = Field(..., description="Overall health score (0.0 to 100.0)")
     next_day_failure_prob: float = Field(..., description="Predicted failure probability for next operating day (0.0 to 1.0)")
     consequence_score: float = Field(..., description="Consequence-weighted operational disruption impact score")
@@ -75,11 +77,50 @@ class TrainDetailResponse(BaseModel):
     primary_risk_subsystem: str = Field(..., description="Subsystem with the highest calculated risk")
     maintenance_urgency: str = Field(..., description="Maintenance urgency rating: 'HIGH', 'MEDIUM', or 'LOW'")
     telemetry: TrainTelemetryMetrics = Field(..., description="Raw operational telemetry metrics")
-    notes: Optional[str] = Field("Job-card status and branding priorities currently unpopulated.", description="Audit notes")
+    notes: Optional[str] = Field("Branding priorities currently unpopulated in base telemetry.", description="Audit notes")
 
 class FleetTrainsResponse(BaseModel):
     total_trains: int = Field(..., description="Total count of trains returned")
     trains: List[TrainDetailResponse] = Field(..., description="List of train objects")
+
+# Pydantic Models for Job Cards & Work Orders
+class JobCardResponse(BaseModel):
+    job_id: str = Field(..., description="Unique job card ID (e.g. 'JC-1001')")
+    job_number: str = Field(..., description="Work order number (e.g. 'JOB-2026-8810')")
+    train_id: str = Field(..., description="Target train ID")
+    description: str = Field(..., description="Detailed maintenance description")
+    category: str = Field(..., description="Job classification ('PREVENTIVE_MAINTENANCE', 'CORRECTIVE_MAINTENANCE', 'INSPECTION', 'OVERHAUL', 'EMERGENCY_REPAIR')")
+    priority: str = Field(..., description="Priority level ('CRITICAL', 'HIGH', 'MEDIUM', 'LOW')")
+    status: str = Field(..., description="Job lifecycle status ('OPEN', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED')")
+    due_date: str = Field(..., description="Target completion ISO timestamp")
+    estimated_duration_hours: float = Field(..., description="Estimated repair duration in hours")
+    source: str = Field("MAXIMO_CMMS", description="Originating CMMS source")
+    created_at: str = Field(..., description="Creation ISO timestamp")
+    updated_at: str = Field(..., description="Last update ISO timestamp")
+    is_critical: bool = Field(..., description="True if status is OPEN/IN_PROGRESS and priority is CRITICAL or HIGH")
+    is_overdue: bool = Field(..., description="True if status is OPEN/IN_PROGRESS and due_date has passed")
+
+class JobCardsListResponse(BaseModel):
+    train_id: str = Field(..., description="Target train ID")
+    total_jobs: int = Field(..., description="Total count of matching job cards")
+    open_critical_jobs_count: int = Field(..., description="Count of open CRITICAL/HIGH priority job cards")
+    job_cards: List[JobCardResponse] = Field(..., description="List of job card objects")
+
+class JobCardCreateRequest(BaseModel):
+    train_id: str = Field(..., description="Target train ID (e.g. 'KM-101')")
+    description: str = Field(..., description="Detailed maintenance work description")
+    category: Optional[str] = Field("CORRECTIVE_MAINTENANCE", description="Job category: 'PREVENTIVE_MAINTENANCE', 'CORRECTIVE_MAINTENANCE', 'INSPECTION', 'OVERHAUL', 'EMERGENCY_REPAIR'")
+    priority: Optional[str] = Field("MEDIUM", description="Priority level: 'CRITICAL', 'HIGH', 'MEDIUM', 'LOW'")
+    due_date: Optional[str] = Field(None, description="Target completion ISO timestamp string")
+    estimated_duration_hours: Optional[float] = Field(2.0, ge=0.5, le=48.0, description="Estimated duration in hours")
+    source: Optional[str] = Field("MAXIMO_CMMS", description="Originating CMMS source system")
+
+class JobCardUpdateRequest(BaseModel):
+    status: Optional[str] = Field(None, description="New status: 'OPEN', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED'")
+    priority: Optional[str] = Field(None, description="New priority: 'CRITICAL', 'HIGH', 'MEDIUM', 'LOW'")
+    description: Optional[str] = Field(None, description="Updated work description")
+    due_date: Optional[str] = Field(None, description="Updated due date ISO timestamp string")
+
 
 # Pydantic Models for Fitness Certificates
 class DepartmentFitnessResponse(BaseModel):
@@ -240,6 +281,8 @@ def _get_all_trains_data() -> List[Dict[str, Any]]:
         is_fit = fit_eval["is_fit_for_service"] if fit_eval else False
         fit_status = fit_eval["overall_fitness_status"] if fit_eval else "UNFIT_SAFETY_CERTIFICATE_EXPIRED"
 
+        open_critical_count = job_card_manager.get_open_critical_jobs_count(t_id)
+
         train_data = {
             "train_id": t_id,
             "train_type": "Alstom Metropolis 3-Car",
@@ -247,6 +290,7 @@ def _get_all_trains_data() -> List[Dict[str, Any]]:
             "current_location_name": loc_name,
             "is_fit_for_service": is_fit,
             "overall_fitness_status": fit_status,
+            "open_critical_jobs_count": open_critical_count,
             "health_score": pred["health_score"],
             "next_day_failure_prob": pred["next_day_failure_prob"],
             "consequence_score": pred["consequence_score"],
@@ -263,7 +307,7 @@ def _get_all_trains_data() -> List[Dict[str, Any]]:
                 "past_30d_delays": raw.get("past_30d_delays", 0),
                 "past_30d_faults": raw.get("past_30d_faults", 0)
             },
-            "notes": "Job-card status and branding priorities currently unpopulated."
+            "notes": "Operational job-card summary included."
         }
         trains_list.append(train_data)
     return trains_list
@@ -567,6 +611,117 @@ def get_events_for_train(train_id: str):
         "events": events
     }
 
+
+# -----------------------------------------------------------------------------
+# KMRL Job Card & Work Order APIs (Phase 8)
+# -----------------------------------------------------------------------------
+@app.get("/api/v1/trains/{train_id}/job-cards", response_model=JobCardsListResponse, tags=["Job Cards"])
+@app.get("/api/trains/{train_id}/job-cards", response_model=JobCardsListResponse, tags=["Job Cards"], include_in_schema=False)
+def get_job_cards_for_train(
+    train_id: str,
+    status: Optional[str] = Query(None, description="Filter by status: OPEN, IN_PROGRESS, COMPLETED, CANCELLED"),
+    priority: Optional[str] = Query(None, description="Filter by priority: CRITICAL, HIGH, MEDIUM, LOW"),
+    category: Optional[str] = Query(None, description="Filter by category e.g. EMERGENCY_REPAIR"),
+    is_critical: Optional[bool] = Query(None, description="If true, returns only open CRITICAL/HIGH priority jobs")
+):
+    """
+    Returns all maintenance job cards (work orders) for a specific trainset.
+    Supports filtering by status, priority, category, and criticality.
+    Includes open_critical_jobs_count to quickly identify trains with unresolved safety-critical maintenance.
+    """
+    train_id_upper = train_id.upper()
+    valid_train_ids = [f"KM-{101 + i}" for i in range(25)]
+    if train_id_upper not in valid_train_ids:
+        raise HTTPException(status_code=404, detail=f"Train '{train_id}' not found in fleet.")
+
+    # Validate filter enums
+    if status and status.upper() not in STATUSES:
+        raise HTTPException(status_code=422, detail=f"Invalid status '{status}'. Must be one of {STATUSES}.")
+    if priority and priority.upper() not in PRIORITIES:
+        raise HTTPException(status_code=422, detail=f"Invalid priority '{priority}'. Must be one of {PRIORITIES}.")
+    if category and category.upper() not in CATEGORIES:
+        raise HTTPException(status_code=422, detail=f"Invalid category '{category}'. Must be one of {CATEGORIES}.")
+
+    jobs = job_card_manager.get_job_cards_for_train(
+        train_id=train_id_upper, status=status, priority=priority,
+        category=category, is_critical=is_critical
+    )
+    critical_count = job_card_manager.get_open_critical_jobs_count(train_id_upper)
+    return {
+        "train_id": train_id_upper,
+        "total_jobs": len(jobs),
+        "open_critical_jobs_count": critical_count,
+        "job_cards": jobs
+    }
+
+
+@app.get("/api/v1/job-cards/{job_id}", response_model=JobCardResponse, tags=["Job Cards"])
+@app.get("/api/job-cards/{job_id}", response_model=JobCardResponse, tags=["Job Cards"], include_in_schema=False)
+def get_job_card_by_id(job_id: str):
+    """
+    Returns a specific maintenance job card by its unique job_id (e.g. 'JC-1001').
+    Includes live-computed is_critical and is_overdue flags.
+    Raises 404 if job_id is not found in CMMS.
+    """
+    job = job_card_manager.get_job_card_by_id(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Job card '{job_id}' not found in CMMS.")
+    return job
+
+
+@app.post("/api/v1/job-cards", response_model=JobCardResponse, status_code=201, tags=["Job Cards"])
+def create_job_card(req: JobCardCreateRequest):
+    """
+    Creates a new CMMS maintenance job card / work order for a specific trainset.
+    Status defaults to OPEN. job_id and job_number are auto-generated.
+    Raises 404 if train_id is not valid. Raises 422 if category or priority enum is invalid.
+    """
+    train_id_upper = req.train_id.upper()
+    valid_train_ids = [f"KM-{101 + i}" for i in range(25)]
+    if train_id_upper not in valid_train_ids:
+        raise HTTPException(status_code=404, detail=f"Train '{req.train_id}' not found in fleet.")
+
+    category_upper = (req.category or "CORRECTIVE_MAINTENANCE").upper()
+    priority_upper = (req.priority or "MEDIUM").upper()
+
+    if category_upper not in CATEGORIES:
+        raise HTTPException(status_code=422, detail=f"Invalid category '{req.category}'. Must be one of {CATEGORIES}.")
+    if priority_upper not in PRIORITIES:
+        raise HTTPException(status_code=422, detail=f"Invalid priority '{req.priority}'. Must be one of {PRIORITIES}.")
+
+    job = job_card_manager.create_job_card(
+        train_id=train_id_upper,
+        description=req.description,
+        category=category_upper,
+        priority=priority_upper,
+        due_date=req.due_date,
+        estimated_duration_hours=req.estimated_duration_hours or 2.0,
+        source=req.source or "MAXIMO_CMMS"
+    )
+    return job
+
+
+@app.patch("/api/v1/job-cards/{job_id}", response_model=JobCardResponse, tags=["Job Cards"])
+def update_job_card(job_id: str, req: JobCardUpdateRequest):
+    """
+    Updates an existing job card's status, priority, description, or due_date.
+    Validates enum values for status and priority. Raises 404 if job_id not found.
+    """
+    if req.status and req.status.upper() not in STATUSES:
+        raise HTTPException(status_code=422, detail=f"Invalid status '{req.status}'. Must be one of {STATUSES}.")
+    if req.priority and req.priority.upper() not in PRIORITIES:
+        raise HTTPException(status_code=422, detail=f"Invalid priority '{req.priority}'. Must be one of {PRIORITIES}.")
+
+    updated = job_card_manager.update_job_card(
+        job_id=job_id,
+        status=req.status,
+        priority=req.priority,
+        description=req.description,
+        due_date=req.due_date
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail=f"Job card '{job_id}' not found in CMMS.")
+    return updated
 
 
 @app.get("/api/v1/fleet/health")
