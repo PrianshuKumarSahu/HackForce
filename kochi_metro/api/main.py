@@ -11,10 +11,11 @@ from kochi_metro.ml.chart_evaluator import ChartEfficiencyEvaluator
 from kochi_metro.ml.closed_loop import ClosedLoopSimulatorEngine
 from kochi_metro.data.state import state_store
 from kochi_metro.data.locations import location_manager
+from kochi_metro.data.fitness import fitness_manager, DEPARTMENTS
 
 app = FastAPI(
     title="Kochi Metro Next-Gen AI Operations & Prediction Engine API",
-    description="Production REST API providing ML predictions, CP-SAT resilience optimization, chart efficiency evaluation, IoT Telemetry ingestion, Event management, and Location/Depot stabling topology.",
+    description="Production REST API providing ML predictions, CP-SAT resilience optimization, chart efficiency evaluation, IoT Telemetry ingestion, Event management, Location/Depot stabling topology, and Fitness Certificate safety verification.",
     version="1.0.0"
 )
 
@@ -65,6 +66,8 @@ class TrainDetailResponse(BaseModel):
     train_type: str = Field("Alstom Metropolis 3-Car", description="Trainset manufacturer and car configuration")
     current_location_id: int = Field(..., description="ID of current station or depot track location")
     current_location_name: str = Field(..., description="Name of current location")
+    is_fit_for_service: bool = Field(..., description="True if all 3 mandatory department fitness certs (Rolling Stock, Signalling, Telecom) are valid now")
+    overall_fitness_status: str = Field(..., description="'FIT_FOR_SERVICE' or 'UNFIT_SAFETY_CERTIFICATE_EXPIRED'")
     health_score: float = Field(..., description="Overall health score (0.0 to 100.0)")
     next_day_failure_prob: float = Field(..., description="Predicted failure probability for next operating day (0.0 to 1.0)")
     consequence_score: float = Field(..., description="Consequence-weighted operational disruption impact score")
@@ -72,11 +75,38 @@ class TrainDetailResponse(BaseModel):
     primary_risk_subsystem: str = Field(..., description="Subsystem with the highest calculated risk")
     maintenance_urgency: str = Field(..., description="Maintenance urgency rating: 'HIGH', 'MEDIUM', or 'LOW'")
     telemetry: TrainTelemetryMetrics = Field(..., description="Raw operational telemetry metrics")
-    notes: Optional[str] = Field("Fitness certs and job-card status currently unpopulated in base telemetry.", description="Audit notes")
+    notes: Optional[str] = Field("Job-card status and branding priorities currently unpopulated.", description="Audit notes")
 
 class FleetTrainsResponse(BaseModel):
     total_trains: int = Field(..., description="Total count of trains returned")
     trains: List[TrainDetailResponse] = Field(..., description="List of train objects")
+
+# Pydantic Models for Fitness Certificates
+class DepartmentFitnessResponse(BaseModel):
+    department: str = Field(..., description="Department name ('Rolling Stock', 'Signalling', 'Telecom')")
+    status: str = Field(..., description="Certificate status: 'APPROVED', 'EXPIRED', 'REVOKED', 'PENDING', 'MISSING'")
+    issued_at: Optional[str] = Field(None, description="ISO timestamp when certificate was issued")
+    expires_at: Optional[str] = Field(None, description="ISO timestamp when certificate expires")
+    last_verified_at: Optional[str] = Field(None, description="ISO timestamp when last verified")
+    source: str = Field("KMRL_SAFETY_BOARD", description="Certifying safety board authority")
+    is_valid_now: bool = Field(..., description="True if status is APPROVED and expires_at is strictly in the future")
+    days_until_expiry: float = Field(..., description="Days remaining until certificate expiration")
+    approaching_expiry: bool = Field(..., description="True if valid now and expires within 7 days")
+
+class TrainFitnessSummaryResponse(BaseModel):
+    train_id: str = Field(..., description="Trainset ID")
+    overall_fitness_status: str = Field(..., description="'FIT_FOR_SERVICE' or 'UNFIT_SAFETY_CERTIFICATE_EXPIRED'")
+    is_fit_for_service: bool = Field(..., description="True if all mandatory department certs are valid now")
+    has_approaching_expiry: bool = Field(..., description="True if any valid department cert expires within 7 days")
+    evaluation_reasons: List[str] = Field(..., description="Safety compliance evaluation reasons")
+    department_certificates: List[DepartmentFitnessResponse] = Field(..., description="List of 3 department certificates")
+
+class FitnessCertificateUpdateRequest(BaseModel):
+    department: str = Field(..., description="Department name ('Rolling Stock', 'Signalling', 'Telecom')")
+    status: Optional[str] = Field("APPROVED", description="Status code: 'APPROVED', 'EXPIRED', 'REVOKED', 'PENDING'")
+    days_valid: Optional[int] = Field(60, ge=1, le=365, description="Days valid from issue date")
+    source: Optional[str] = Field("KMRL_SAFETY_BOARD", description="Certifying authority name")
+
 
 # Pydantic Models for Depots & Locations
 class DepotSummaryResponse(BaseModel):
@@ -206,11 +236,17 @@ def _get_all_trains_data() -> List[Dict[str, Any]]:
         loc_details = location_manager.get_location_details(loc_id)
         loc_name = loc_details["name"] if loc_details else "Unknown Location"
 
+        fit_eval = fitness_manager.get_train_fitness(t_id)
+        is_fit = fit_eval["is_fit_for_service"] if fit_eval else False
+        fit_status = fit_eval["overall_fitness_status"] if fit_eval else "UNFIT_SAFETY_CERTIFICATE_EXPIRED"
+
         train_data = {
             "train_id": t_id,
             "train_type": "Alstom Metropolis 3-Car",
             "current_location_id": loc_id,
             "current_location_name": loc_name,
+            "is_fit_for_service": is_fit,
+            "overall_fitness_status": fit_status,
             "health_score": pred["health_score"],
             "next_day_failure_prob": pred["next_day_failure_prob"],
             "consequence_score": pred["consequence_score"],
@@ -227,7 +263,7 @@ def _get_all_trains_data() -> List[Dict[str, Any]]:
                 "past_30d_delays": raw.get("past_30d_delays", 0),
                 "past_30d_faults": raw.get("past_30d_faults", 0)
             },
-            "notes": "Fitness certs and job-card status currently unpopulated in base telemetry."
+            "notes": "Job-card status and branding priorities currently unpopulated."
         }
         trains_list.append(train_data)
     return trains_list
@@ -242,11 +278,11 @@ def read_root():
         "endpoints": [
             "/api/v1/trains",
             "/api/v1/trains/{train_id}",
+            "/api/v1/trains/{train_id}/fitness",
+            "/api/v1/trains/{train_id}/fitness/{department}",
             "/api/v1/trains/{train_id}/location",
             "/api/v1/depots",
             "/api/v1/locations",
-            "/api/v1/locations/{location_id}",
-            "/api/v1/locations/{location_id}/connections",
             "/api/v1/iot/telemetry",
             "/api/v1/events",
             "/api/v1/fleet/health",
@@ -254,6 +290,65 @@ def read_root():
             "/api/v1/chart/optimize"
         ]
     }
+
+# -----------------------------------------------------------------------------
+# KMRL Fitness Certificate Safety Verification APIs
+# -----------------------------------------------------------------------------
+@app.get("/api/v1/trains/{train_id}/fitness", response_model=TrainFitnessSummaryResponse, tags=["Safety & Fitness"])
+@app.get("/api/trains/{train_id}/fitness", response_model=TrainFitnessSummaryResponse, tags=["Safety & Fitness"], include_in_schema=False)
+def get_train_fitness_summary(train_id: str):
+    """
+    Returns complete mandatory safety fitness certificate status across all 3 technical departments
+    (Rolling Stock, Signalling, Telecom). Strictly enforces safety expiration validation.
+    """
+    train_id_upper = train_id.upper()
+    valid_train_ids = [f"KM-{101 + i}" for i in range(25)]
+    if train_id_upper not in valid_train_ids:
+        raise HTTPException(status_code=404, detail=f"Train '{train_id}' not found in fleet.")
+
+    fitness_summary = fitness_manager.get_train_fitness(train_id_upper)
+    if not fitness_summary:
+        raise HTTPException(status_code=404, detail=f"Fitness record for train '{train_id}' not found.")
+    return fitness_summary
+
+@app.get("/api/v1/trains/{train_id}/fitness/{department}", response_model=DepartmentFitnessResponse, tags=["Safety & Fitness"])
+@app.get("/api/trains/{train_id}/fitness/{department}", response_model=DepartmentFitnessResponse, tags=["Safety & Fitness"], include_in_schema=False)
+def get_department_fitness_certificate(train_id: str, department: str):
+    """
+    Returns safety fitness certificate details for a specific technical department (Rolling Stock, Signalling, Telecom).
+    """
+    train_id_upper = train_id.upper()
+    valid_train_ids = [f"KM-{101 + i}" for i in range(25)]
+    if train_id_upper not in valid_train_ids:
+        raise HTTPException(status_code=404, detail=f"Train '{train_id}' not found in fleet.")
+
+    dept_cert = fitness_manager.get_department_fitness(train_id_upper, department)
+    if not dept_cert:
+        raise HTTPException(status_code=400, detail=f"Invalid department '{department}'. Must be one of {DEPARTMENTS}.")
+    return dept_cert
+
+@app.post("/api/v1/trains/{train_id}/fitness", response_model=DepartmentFitnessResponse, tags=["Safety & Fitness"])
+@app.patch("/api/v1/trains/{train_id}/fitness/{department}", response_model=DepartmentFitnessResponse, tags=["Safety & Fitness"])
+def update_department_fitness_certificate(train_id: str, req: FitnessCertificateUpdateRequest):
+    """
+    Issues or updates a mandatory department safety fitness certificate for a train set.
+    """
+    train_id_upper = train_id.upper()
+    valid_train_ids = [f"KM-{101 + i}" for i in range(25)]
+    if train_id_upper not in valid_train_ids:
+        raise HTTPException(status_code=404, detail=f"Train '{train_id}' not found in fleet.")
+
+    updated_cert = fitness_manager.update_certificate(
+        train_id=train_id_upper,
+        department=req.department,
+        status=req.status or "APPROVED",
+        days_valid=req.days_valid or 60,
+        source=req.source or "KMRL_SAFETY_BOARD"
+    )
+    if not updated_cert:
+        raise HTTPException(status_code=400, detail=f"Invalid department '{req.department}'. Must be one of {DEPARTMENTS}.")
+    return updated_cert
+
 
 # -----------------------------------------------------------------------------
 # KMRL Location & Depot APIs

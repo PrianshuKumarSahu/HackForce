@@ -291,8 +291,69 @@ class TestKochiMetroEngine(unittest.TestCase):
         res_tloc_updated = self.client.get("/api/v1/trains/KM-101/location")
         self.assertEqual(res_tloc_updated.json()["location_id"], 1)
 
+    def test_11_fitness_certificates_api(self):
+        # 1. Valid certificate query (KM-101)
+        res_valid = self.client.get("/api/v1/trains/KM-101/fitness")
+        self.assertEqual(res_valid.status_code, 200)
+        valid_data = res_valid.json()
+        self.assertTrue(valid_data["is_fit_for_service"])
+        self.assertEqual(valid_data["overall_fitness_status"], "FIT_FOR_SERVICE")
+        self.assertEqual(len(valid_data["department_certificates"]), 3)
+
+        # Department specific valid query
+        res_dept = self.client.get("/api/v1/trains/KM-101/fitness/Signalling")
+        self.assertEqual(res_dept.status_code, 200)
+        dept_data = res_dept.json()
+        self.assertEqual(dept_data["department"], "Signalling")
+        self.assertTrue(dept_data["is_valid_now"])
+        self.assertEqual(dept_data["status"], "APPROVED")
+
+        # 2. Expired certificate query (KM-104 has expired Signalling cert)
+        res_exp = self.client.get("/api/v1/trains/KM-104/fitness")
+        self.assertEqual(res_exp.status_code, 200)
+        exp_data = res_exp.json()
+        self.assertFalse(exp_data["is_fit_for_service"])
+        self.assertEqual(exp_data["overall_fitness_status"], "UNFIT_SAFETY_CERTIFICATE_EXPIRED")
+        
+        res_exp_dept = self.client.get("/api/v1/trains/KM-104/fitness/Signalling")
+        self.assertEqual(res_exp_dept.status_code, 200)
+        self.assertFalse(res_exp_dept.json()["is_valid_now"])
+        self.assertEqual(res_exp_dept.json()["status"], "EXPIRED")
+
+        # 3. Invalid train ID query (KM-999 -> 404)
+        res_bad_train = self.client.get("/api/v1/trains/KM-999/fitness")
+        self.assertEqual(res_bad_train.status_code, 404)
+
+        # 4. Certificate approaching expiry query (KM-105 Rolling Stock expires in 3 days)
+        res_appr = self.client.get("/api/v1/trains/KM-105/fitness")
+        self.assertEqual(res_appr.status_code, 200)
+        appr_data = res_appr.json()
+        self.assertTrue(appr_data["has_approaching_expiry"])
+        
+        res_appr_dept = self.client.get("/api/v1/trains/KM-105/fitness/Rolling Stock")
+        self.assertEqual(res_appr_dept.status_code, 200)
+        self.assertTrue(res_appr_dept.json()["approaching_expiry"])
+        self.assertLessEqual(res_appr_dept.json()["days_until_expiry"], 7.0)
+
+        # 5. Issue/Update certificate (Renew KM-104 Signalling cert)
+        update_payload = {
+            "department": "Signalling",
+            "status": "APPROVED",
+            "days_valid": 90,
+            "source": "KMRL_SAFETY_BOARD"
+        }
+        res_renew = self.client.post("/api/v1/trains/KM-104/fitness", json=update_payload)
+        self.assertEqual(res_renew.status_code, 200)
+        self.assertTrue(res_renew.json()["is_valid_now"])
+
+        # Re-query KM-104 fitness summary to verify it is now FIT_FOR_SERVICE
+        res_recheck = self.client.get("/api/v1/trains/KM-104/fitness")
+        self.assertTrue(res_recheck.json()["is_fit_for_service"])
+        self.assertEqual(res_recheck.json()["overall_fitness_status"], "FIT_FOR_SERVICE")
+
 if __name__ == "__main__":
     unittest.main()
+
 
 
 

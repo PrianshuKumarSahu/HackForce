@@ -342,16 +342,86 @@ Returns outbound track connections from a location including distance, movement 
 #### 5. `GET /api/v1/trains/{train_id}/location`
 Returns current location, depot name, track type, and stabling state of a specific trainset.
 
-**Sample Request**: `GET /api/v1/trains/KM-101/location`  
+---
+
+### 🛡️ KMRL Safety & Fitness Certificate Verification APIs
+
+#### Safety Regulations & Mandatory Department Compliance
+Every KMRL train set requires valid safety clearance certificates from **3 mandatory technical departments**:
+1. **Rolling Stock**: Mechanical, Brakes, Bogies, & Car Body Safety.
+2. **Signalling**: Automatic Train Control & Protection Systems (ATC / ATP).
+3. **Telecom**: Train-to-Ground Radio, Passenger Information Systems (PIS), & Emergency Alarm Systems.
+
+#### Rules Enforced:
+* **Expiration Validation**: A train is `FIT_FOR_SERVICE` if and only if **all 3 mandatory departments** have valid certificates where `status == "APPROVED"` and `expires_at > current_timestamp`.
+* **Zero Silent Fallbacks**: Expired certificates are strictly flagged as `UNFIT_SAFETY_CERTIFICATE_EXPIRED` (`is_valid_now = false`).
+* **Approaching Expiration Alert**: Certificates expiring within **7 days** trigger `approaching_expiry = true` and `has_approaching_expiry = true`.
+
+#### 1. `GET /api/v1/trains/{train_id}/fitness` (Alias: `GET /api/trains/{train_id}/fitness`)
+Retrieves overall safety compliance status across all 3 technical departments.
+
+**Sample Request**: `GET /api/v1/trains/KM-101/fitness`  
 **Sample Response (`200 OK`)**:
 ```json
 {
   "train_id": "KM-101",
-  "location_id": 101,
-  "location_name": "Muttom Depot Stabling Line 1",
-  "depot": "Muttom Depot",
-  "type": "STABLING_LINE",
-  "is_depot_track": true
+  "overall_fitness_status": "FIT_FOR_SERVICE",
+  "is_fit_for_service": true,
+  "has_approaching_expiry": false,
+  "evaluation_reasons": [
+    "All mandatory department fitness certificates (Rolling Stock, Signalling, Telecom) are valid."
+  ],
+  "department_certificates": [
+    {
+      "department": "Rolling Stock",
+      "status": "APPROVED",
+      "issued_at": "2026-07-29T02:30:00.000000",
+      "expires_at": "2026-09-27T02:30:00.000000",
+      "last_verified_at": "2026-08-29T02:30:00.000000",
+      "source": "KMRL_SAFETY_BOARD",
+      "is_valid_now": true,
+      "days_until_expiry": 29.0,
+      "approaching_expiry": false
+    },
+    {
+      "department": "Signalling",
+      "status": "APPROVED",
+      "issued_at": "2026-07-29T02:30:00.000000",
+      "expires_at": "2026-09-27T02:30:00.000000",
+      "last_verified_at": "2026-08-29T02:30:00.000000",
+      "source": "KMRL_SAFETY_BOARD",
+      "is_valid_now": true,
+      "days_until_expiry": 29.0,
+      "approaching_expiry": false
+    },
+    {
+      "department": "Telecom",
+      "status": "APPROVED",
+      "issued_at": "2026-07-29T02:30:00.000000",
+      "expires_at": "2026-09-27T02:30:00.000000",
+      "last_verified_at": "2026-08-29T02:30:00.000000",
+      "source": "KMRL_SAFETY_BOARD",
+      "is_valid_now": true,
+      "days_until_expiry": 29.0,
+      "approaching_expiry": false
+    }
+  ]
+}
+```
+
+#### 2. `GET /api/v1/trains/{train_id}/fitness/{department}`
+Retrieves specific safety certificate for a department (`Rolling Stock`, `Signalling`, `Telecom`).
+
+#### 3. `POST /api/v1/trains/{train_id}/fitness` / `PATCH /api/v1/trains/{train_id}/fitness/{department}`
+Issues or updates a department safety certificate.
+
+**Sample Request Payload**:
+```json
+{
+  "department": "Signalling",
+  "status": "APPROVED",
+  "days_valid": 90,
+  "source": "COMMISSIONER_METRO_RAIL_SAFETY"
 }
 ```
 
@@ -370,7 +440,8 @@ Returns current location, depot name, track type, and stabling state of a specif
 
 ## 📌 Field Availability Notice
 
-* **Available Fields**: `train_id`, `train_type`, `current_location_id`, `current_location_name`, `health_score`, `next_day_failure_prob`, `consequence_score`, `subsystem_risks` (`brakes`, `doors`, `hvac`, `traction`), `primary_risk_subsystem`, `maintenance_urgency`, `brake_pad_wear_pct`, `door_cycles`, `hvac_pressure_psi`, `traction_motor_temp_c`, `mileage_km`, `days_since_ibl`, `past_30d_delays`, `past_30d_faults`.
-* **Live IoT & Location Overlay**: Submitting IoT telemetry with `location_id` dynamically updates the train's position and reflects on `GET /api/v1/trains`, `GET /api/v1/trains/{train_id}`, and `GET /api/v1/locations`!
+* **Available Fields**: `train_id`, `train_type`, `current_location_id`, `current_location_name`, `is_fit_for_service`, `overall_fitness_status`, `health_score`, `next_day_failure_prob`, `consequence_score`, `subsystem_risks` (`brakes`, `doors`, `hvac`, `traction`), `primary_risk_subsystem`, `maintenance_urgency`, `brake_pad_wear_pct`, `door_cycles`, `hvac_pressure_psi`, `traction_motor_temp_c`, `mileage_km`, `days_since_ibl`, `past_30d_delays`, `past_30d_faults`.
+* **Live Safety & IoT Overlay**: Expiration or revocation of safety certificates immediately updates `is_fit_for_service` across all train endpoints!
+
 
 
