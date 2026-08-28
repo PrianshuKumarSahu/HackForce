@@ -117,5 +117,36 @@ class TestKochiMetroEngine(unittest.TestCase):
         self.assertEqual(res_whatif.status_code, 200)
         self.assertIn("revised_efficiency_score_pct", res_whatif.json())
 
+    def test_08_trains_api(self):
+        # GET /api/v1/trains (All trains)
+        res_trains = self.client.get("/api/v1/trains")
+        self.assertEqual(res_trains.status_code, 200)
+        data = res_trains.json()
+        self.assertEqual(data["total_trains"], 25)
+        self.assertEqual(len(data["trains"]), 25)
+        first_train = data["trains"][0]
+        self.assertIn("train_id", first_train)
+        self.assertIn("health_score", first_train)
+        self.assertIn("subsystem_risks", first_train)
+        self.assertIn("telemetry", first_train)
+
+        # GET /api/v1/trains/{train_id} (Valid train ID)
+        train_id = first_train["train_id"]
+        res_single = self.client.get(f"/api/v1/trains/{train_id}")
+        self.assertEqual(res_single.status_code, 200)
+        single_data = res_single.json()
+        self.assertEqual(single_data["train_id"], train_id)
+        self.assertIn("brake_pad_wear_pct", single_data["telemetry"])
+
+        # GET /api/v1/trains/{train_id} (Alias path)
+        res_alias = self.client.get(f"/api/trains/{train_id}")
+        self.assertEqual(res_alias.status_code, 200)
+
+        # GET /api/v1/trains/{train_id} (Invalid train ID)
+        res_invalid = self.client.get("/api/v1/trains/KM-999")
+        self.assertEqual(res_invalid.status_code, 404)
+        self.assertIn("not found", res_invalid.json()["detail"].lower())
+
 if __name__ == "__main__":
     unittest.main()
+
