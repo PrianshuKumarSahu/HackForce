@@ -13,10 +13,20 @@ from kochi_metro.data.state import state_store
 from kochi_metro.data.locations import location_manager
 from kochi_metro.data.fitness import fitness_manager, DEPARTMENTS
 
+from fastapi.middleware.cors import CORSMiddleware
+
 app = FastAPI(
     title="Kochi Metro Next-Gen AI Operations & Prediction Engine API",
     description="Production REST API providing ML predictions, CP-SAT resilience optimization, chart efficiency evaluation, IoT Telemetry ingestion, Event management, Location/Depot stabling topology, and Fitness Certificate safety verification.",
     version="1.0.0"
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Global Engine Instances
