@@ -1,6 +1,11 @@
+import os
+import joblib
 import numpy as np
 from typing import Dict, List, Any
 from kochi_metro.data.generator import KOCHI_STATIONS, KochiMetroDataGenerator
+
+MODELS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models")
+DEMAND_MODEL_PATH = os.path.join(MODELS_DIR, "demand_models.joblib")
 
 class PassengerDemandPredictor:
     """
@@ -9,6 +14,9 @@ class PassengerDemandPredictor:
     """
     def __init__(self):
         self.train_capacity = 900  # 3-car Alstom Metropolis trainset standard capacity
+        self.is_trained = os.path.exists(DEMAND_MODEL_PATH)
+        if self.is_trained:
+            self.bundle = joblib.load(DEMAND_MODEL_PATH)
 
     def predict_corridor_flow(self, is_peak_hour: bool = True, day_type: str = "WEEKDAY") -> Dict[str, Any]:
         """

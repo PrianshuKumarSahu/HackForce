@@ -4,18 +4,33 @@ from typing import Dict, List, Any
 from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 from kochi_metro.data.generator import KochiMetroDataGenerator
 
+import os
+import joblib
+
+MODELS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models")
+HEALTH_MODEL_PATH = os.path.join(MODELS_DIR, "health_models.joblib")
+
 class TrainHealthPredictor:
     """
     ML Engine for Trainset Health & Subsystem Failure Prediction.
     Calculates subsystem risks (Brakes, Doors, HVAC, Traction) and failure probability.
     """
     def __init__(self):
-        self.model_failure = GradientBoostingRegressor(n_estimators=100, random_state=42)
-        self.model_brake = RandomForestRegressor(n_estimators=50, random_state=42)
-        self.model_door = RandomForestRegressor(n_estimators=50, random_state=42)
-        self.model_hvac = RandomForestRegressor(n_estimators=50, random_state=42)
-        self.model_traction = RandomForestRegressor(n_estimators=50, random_state=42)
-        self.is_trained = False
+        if os.path.exists(HEALTH_MODEL_PATH):
+            bundle = joblib.load(HEALTH_MODEL_PATH)
+            self.model_failure = bundle["model_failure"]
+            self.model_brake = bundle["model_brake"]
+            self.model_door = bundle["model_door"]
+            self.model_hvac = bundle["model_hvac"]
+            self.model_traction = bundle["model_traction"]
+            self.is_trained = True
+        else:
+            self.model_failure = GradientBoostingRegressor(n_estimators=100, random_state=42)
+            self.model_brake = RandomForestRegressor(n_estimators=50, random_state=42)
+            self.model_door = RandomForestRegressor(n_estimators=50, random_state=42)
+            self.model_hvac = RandomForestRegressor(n_estimators=50, random_state=42)
+            self.model_traction = RandomForestRegressor(n_estimators=50, random_state=42)
+            self.is_trained = False
 
     def train_models(self, df_telemetry: pd.DataFrame):
         """
