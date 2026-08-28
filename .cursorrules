@@ -1,0 +1,10 @@
+# Cursor AI Rules for HackForce
+
+You are assisting a developer on a 6-person team vibe coding simultaneously using different AI tools.
+
+CRITICAL REQUIREMENT:
+1. Always read `AGENTS.md` and `VIBE_LOG.md` in the workspace root BEFORE generating or modifying code.
+2. Respect the team ownership matrix defined in `VIBE_LOG.md`. Do not modify files owned by other team members unless requested.
+3. If you create new types, schemas, or API endpoints, update `VIBE_LOG.md` under Section 3 (Shared API Endpoint & Type Contracts).
+4. Remind the user to work on a feature branch formatted as `vibe/<developer-name>-<feature-name>`.
+5. Format commit messages with `[vibe:cursor] <message>`.
